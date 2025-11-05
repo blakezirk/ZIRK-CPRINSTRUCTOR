@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#0f172a">
+
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dual Stopwatch - CPR Instructor</title>
+<style>
+  :root{
+    --bg:#0f172a;
+    --card:#111827;
+    --muted:#94a3b8;
+    --ok:#16a34a;
+    --warn:#f59e0b;
+    --bad:#ef4444;
+    --accent:#38bdf8;
+  }
+  html,body{height:100%;margin:0;background:var(--bg);color:#e5e7eb;font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial}
+  .wrap{max-width:900px;margin:0 auto;padding:20px}
+  h1{font-size:20px;font-weight:700;margin:8px 0 16px 0;color:#fff}
+  .grid{display:grid;grid-template-columns:1fr;gap:14px}
+  @media(min-width:780px){.grid{grid-template-columns:1fr 1fr}}
+  .card{background:var(--card);border-radius:14px;padding:16px;border:1px solid #1f2937}
+  .label{font-size:14px;color:var(--muted);margin-bottom:6px}
+  .time{font-variant-numeric:tabular-nums;letter-spacing:1px;font-size:54px;font-weight:800;margin:0}
+  .row{display:flex;gap:10px;flex-wrap:wrap}
+  button{
+    border:1px solid #334155;background:#0b1220;color:#e5e7eb;
+    padding:10px 14px;border-radius:10px;font-weight:600;cursor:pointer;
+  }
+  button.primary{background:#0ea5e9;border-color:#0284c7}
+  button.good{background:#16a34a;border-color:#15803d}
+  button.warn{background:#f59e0b;border-color:#d97706}
+  button.danger{background:#ef4444;border-color:#dc2626}
+  button:disabled{opacity:.5;cursor:not-allowed}
+  .pill{display:inline-block;padding:6px 10px;border-radius:999px;font-weight:700}
+  .ok{background-color:color-mix(in srgb, var(--ok) 25%, transparent);border:1px solid var(--ok);}
+  .mid{background-color:color-mix(in srgb, var(--warn) 25%, transparent);border:1px solid var(--warn);}
+  .bad{background-color:color-mix(in srgb, var(--bad) 25%, transparent);border:1px solid var(--bad);}
+  .sub{color:var(--muted);font-size:13px}
+  .events{max-height:220px;overflow:auto;border-top:1px dashed #334155;margin-top:8px;padding-top:8px}
+  .event{display:flex;gap:10px;align-items:center;padding:6px 0;border-bottom:1px dashed #1f2937}
+  .event:last-child{border-bottom:0}
+  input[type=text]{background:#0b1220;border:1px solid #334155;color:#e5e7eb;padding:10px;border-radius:10px;flex:1;min-width:160px}
+  .hint{font-size:12px;color:var(--muted)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Dual Stopwatch, CPR Instructor</h1>
+  <div class="grid">
+    <div class="card">
+      <div class="label">Scenario</div>
+      <p class="time" id="scenarioTime">00:00</p>
+      <div class="row" style="margin-top:8px">
+        <button class="primary" id="startBtn">Start</button>
+        <button id="pauseBtn">Pause</button>
+        <button id="resumeBtn">Resume</button>
+        <button class="danger" id="stopBtn">Stop</button>
+      </div>
+      <p class="hint">Tap Start as soon as you finish the brief.</p>
+    </div>
+
+    <div class="card" id="compCard">
+      <div class="label">Compressions</div>
+      <p class="time" id="compTime">00:00</p>
+      <div class="row" style="margin-top:8px">
+        <button class="good" id="toggleCompBtn">Start Compressions</button>
+      </div>
+      <div style="margin-top:10px">
+        <div id="fractionLine" class="sub">Compression Fraction: 0.0%</div>
+        <div id="passBadge" class="pill bad" style="margin-top:8px;display:inline-block">Below Target</div>
+        <div class="sub" style="margin-top:6px">Primary threshold 60%, best practice 60 to 80</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:14px">
+    <div class="label">Quick Events</div>
+    <div class="row" style="margin-bottom:10px">
+      <button id="pulseBtn">Pulse Check</button>
+      <button id="aedBtn">AED On</button>
+      <button id="rhythmBtn">Rhythm Check</button>
+      <button id="airwayBtn">Airway Placed</button>
+      <button id="shockBtn">Shock Delivered</button>
+    </div>
+    <div class="row">
+      <input type="text" id="customEvent" placeholder="Custom event">
+      <button id="addEventBtn">Add</button>
+      <button id="exportBtn">Export CSV</button>
+      <button id="resetBtn">Reset</button>
+    </div>
+    <div class="events" id="events"></div>
+  </div>
+</div>
+
+<script>
+(function(){
+  const fmt = t => {
+    const total = Math.max(0, Math.floor(t));
+    const h = Math.floor(total / 3600);
+    const m = Math.floor((total % 3600) / 60);
+    const s = total % 60;
+    return h > 0 ? `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`
+                 : `${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+  };
+
+  // State
+  let scenarioState = "idle"; // idle, running, paused, ended
+  let scenarioStart = 0;
+  let scenarioAccum = 0;
+  let scenarioElapsed = 0;
+
+  let compRunning = false;
+  let compStart = 0;
+  let compAccum = 0;
+  let compElapsed = 0;
+
+  const targetMin = 0.60;
+  const targetMax = 0.80;
+
+  const events = []; // {t,label}
+
+  // DOM
+  const scenarioTime = document.getElementById("scenarioTime");
+  const compTime = document.getElementById("compTime");
+  const compCard = document.getElementById("compCard");
+  const fractionLine = document.getElementById("fractionLine");
+  const passBadge = document.getElementById("passBadge");
+  const eventsDiv = document.getElementById("events");
+
+  const startBtn = document.getElementById("startBtn");
+  const pauseBtn = document.getElementById("pauseBtn");
+  const resumeBtn = document.getElementById("resumeBtn");
+  const stopBtn = document.getElementById("stopBtn");
+  const toggleCompBtn = document.getElementById("toggleCompBtn");
+
+  const pulseBtn = document.getElementById("pulseBtn");
+  const aedBtn = document.getElementById("aedBtn");
+  const rhythmBtn = document.getElementById("rhythmBtn");
+  const airwayBtn = document.getElementById("airwayBtn");
+  const shockBtn = document.getElementById("shockBtn");
+  const addEventBtn = document.getElementById("addEventBtn");
+  const customEvent = document.getElementById("customEvent");
+  const exportBtn = document.getElementById("exportBtn");
+  const resetBtn = document.getElementById("resetBtn");
+
+  function uiUpdate(){
+    scenarioTime.textContent = fmt(scenarioElapsed);
+    compTime.textContent = fmt(compElapsed);
+    compCard.style.background = compRunning ? "rgba(22,163,74,0.15)" : "var(--card)";
+    toggleCompBtn.textContent = compRunning ? "Stop Compressions" : "Start Compressions";
+    toggleCompBtn.className = compRunning ? "warn" : "good";
+
+    const frac = scenarioElapsed > 0 ? compElapsed / scenarioElapsed : 0;
+    fractionLine.textContent = `Compression Fraction: ${(frac*100).toFixed(1)}%`;
+    if (frac >= targetMin && frac <= targetMax){
+      passBadge.textContent = "Within Best Practice";
+      passBadge.className = "pill ok";
+    } else if (frac >= targetMin){
+      passBadge.textContent = "Pass";
+      passBadge.className = "pill mid";
+    } else {
+      passBadge.textContent = "Below Target";
+      passBadge.className = "pill bad";
+    }
+
+    startBtn.disabled = scenarioState === "running";
+    pauseBtn.disabled = scenarioState !== "running";
+    resumeBtn.disabled = scenarioState !== "paused";
+    stopBtn.disabled = scenarioState === "idle";
+    toggleCompBtn.disabled = scenarioState !== "running";
+  }
+
+  function addEvent(label){
+    const t = scenarioElapsed;
+    events.push({t, label});
+    const row = document.createElement("div");
+    row.className = "event";
+    row.innerHTML = `<span class="sub" style="min-width:64px">${fmt(t)}</span><span>${label}</span>`;
+    eventsDiv.prepend(row);
+  }
+
+  startBtn.onclick = () => {
+    if (scenarioState === "running") return;
+    scenarioStart = performance.now();
+    scenarioAccum = 0;
+    scenarioElapsed = 0;
+    compRunning = false;
+    compStart = 0;
+    compAccum = 0;
+    compElapsed = 0;
+    events.length = 0;
+    eventsDiv.innerHTML = "";
+    scenarioState = "running";
+    uiUpdate();
+  };
+
+  pauseBtn.onclick = () => {
+    if (scenarioState !== "running") return;
+    const now = performance.now();
+    scenarioAccum += (now - scenarioStart) / 1000;
+    if (compRunning){
+      compAccum += (now - compStart) / 1000;
+      compRunning = false;
+    }
+    scenarioState = "paused";
+    uiUpdate();
+  };
+
+  resumeBtn.onclick = () => {
+    if (scenarioState !== "paused") return;
+    scenarioStart = performance.now();
+    scenarioState = "running";
+    uiUpdate();
+  };
+
+  stopBtn.onclick = () => {
+    if (scenarioState !== "running" && scenarioState !== "paused") return;
+    if (scenarioState === "running"){
+      const now = performance.now();
+      scenarioAccum += (now - scenarioStart) / 1000;
+      if (compRunning){
+        compAccum += (now - compStart) / 1000;
+        compRunning = false;
+      }
+    }
+    scenarioState = "ended";
+    scenarioElapsed = scenarioAccum;
+    compElapsed = compAccum;
+    uiUpdate();
+  };
+
+  toggleCompBtn.onclick = () => {
+    if (scenarioState !== "running") return;
+    const now = performance.now();
+    if (!compRunning){
+      compRunning = true;
+      compStart = now;
+    } else {
+      compRunning = false;
+      compAccum += (now - compStart) / 1000;
+      compElapsed = compAccum;
+    }
+    uiUpdate();
+  };
+
+  pulseBtn.onclick = () => addEvent("Pulse Check");
+  aedBtn.onclick = () => addEvent("AED On");
+  rhythmBtn.onclick = () => addEvent("Rhythm Check");
+  airwayBtn.onclick = () => addEvent("Airway Placed");
+  shockBtn.onclick = () => addEvent("Shock Delivered");
+  addEventBtn.onclick = () => {
+    const v = customEvent.value.trim();
+    if (!v) return;
+    addEvent(v);
+    customEvent.value = "";
+  };
+
+  exportBtn.onclick = () => {
+    // Build CSV with per-second rows and summary
+    const total = Math.ceil(scenarioElapsed);
+    let csv = "Time,Scenario Seconds,Compression Seconds,Compression Running,Event\n";
+    // Build a naive second by second compression curve from event segments
+    // We only track aggregate, use running flag only for the last second
+    for (let s=0;s<=Math.max(0,total);s++){
+      const lbl = events.find(e => Math.round(e.t) === s)?.label || "";
+      const running = (scenarioState === "running") && (Math.round(scenarioElapsed) === s) && compRunning;
+      // approximate compressionAtT by min(compElapsed, s)
+      const compAtT = Math.min(Math.floor(compElapsed), s);
+      csv += `${s},${s},${compAtT},${running ? 1 : 0},${lbl}\n`;
+    }
+    const frac = scenarioElapsed > 0 ? compElapsed / scenarioElapsed : 0;
+    const pass = frac >= targetMin;
+    const within = frac >= targetMin && frac <= targetMax;
+    function formatSeconds(t){
+      const total = Math.round(t);
+      const m = Math.floor(total / 60);
+      const s = total % 60;
+      return `${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+    }
+    csv += `\nSummary,Total,Compression,Compression Fraction,Pass >= ${Math.round(targetMin*100)}%,Within 60-80%\n`;
+    csv += `,${formatSeconds(scenarioElapsed)},${formatSeconds(compElapsed)},${(frac*100).toFixed(1)}%,${pass ? "YES":"NO"},${within ? "YES":"NO"}\n`;
+
+    const blob = new Blob([csv], {type:"text/csv"});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "AHA_Dual_Stopwatch.csv";
+    a.click();
+    setTimeout(()=>URL.revokeObjectURL(url), 1000);
+  };
+
+  resetBtn.onclick = () => {
+    scenarioState = "idle";
+    scenarioStart = 0;
+    scenarioAccum = 0;
+    scenarioElapsed = 0;
+    compRunning = false;
+    compStart = 0;
+    compAccum = 0;
+    compElapsed = 0;
+    events.length = 0;
+    eventsDiv.innerHTML = "";
+    uiUpdate();
+  };
+
+  // Ticker
+  function tick(){
+    if (scenarioState === "running"){
+      const now = performance.now();
+      scenarioElapsed = scenarioAccum + (now - scenarioStart) / 1000;
+      if (compRunning){
+        compElapsed = compAccum + (now - compStart) / 1000;
+      } else {
+        compElapsed = compAccum;
+      }
+      uiUpdate();
+    }
+    requestAnimationFrame(tick);
+  }
+  uiUpdate();
+  requestAnimationFrame(tick);
+
+})();
+</script>
+
+<script>
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', function() {
+    navigator.serviceWorker.register('./service-worker.js').catch(function(err){
+      console.log('SW registration failed', err);
+    });
+  });
+}
+</script>
+
+</body>
+</html>
